@@ -53,19 +53,23 @@ function classifyColor(r: number, g: number, b: number): string {
   s = Math.round(s * 100);
   l = Math.round(l * 100);
 
-  // High lightness or very low saturation is usually White
-  if (l > 75 || (s < 20 && l > 50)) return 'U';
+  // If it's too dark, consider it empty/shadow
+  if (l < 15) return 'empty';
+
+  // White is highly susceptible to color temp shifts (looks yellow in warm light).
+  // Adjusted: High lightness, or very low saturation even at medium light is considered White
+  if (l > 65 || (s < 25 && l > 40)) return 'U';
   
-  // Check against hue thresholds
-  if (h >= 45 && h <= 80) return 'D'; // Yellow
-  if (h >= 10 && h <= 44) return 'L'; // Orange
-  if (h >= 340 || h <= 10) return 'R'; // Red
-  if (h >= 80 && h <= 165) return 'F'; // Green
+  // Check against hue thresholds tuned for common Rubik's cube plastics under varying indoor/outdoor lighting
+  if (h >= 45 && h <= 75) return 'D'; // Yellow
+  if (h >= 9 && h <= 44) return 'L'; // Orange
+  if (h >= 345 || h <= 8) return 'R'; // Red (shifted to avoid orange overlap)
+  if (h >= 75 && h <= 165) return 'F'; // Green
   if (h >= 165 && h <= 260) return 'B'; // Blue
   
   // Fallback to nearest neighbor if Hue is ambiguous
   for (const [face, [cr, cg, cb]] of Object.entries(CANONICAL_COLORS)) {
-    // Weighted Euclidean distance
+    // Weighted Euclidean distance based on human perception
     const dist = Math.sqrt(
       (r - cr) * (r - cr) * 0.3 + 
       (g - cg) * (g - cg) * 0.59 + 
@@ -100,17 +104,28 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
   const [scannedState, setScannedState] = useState<string[]>([...initialState]);
   // Live preview of the 9 colors on the currently viewed face
   const [liveColors, setLiveColors] = useState<string[]>(Array(9).fill('empty'));
+  const [stableTiles, setStableTiles] = useState<boolean[]>(Array(9).fill(false));
   const [stableProgress, setStableProgress] = useState(0);
   
   const [scanPhase, setScanPhase] = useState<'scanning' | 'review'>('scanning');
   const [isAutoCapture, setIsAutoCapture] = useState(false); // Defaulting to false for more manual control
   
+  // State for history buffer to smooth out color jumping
+  const colorHistoryRef = useRef<string[][]>(Array(9).fill([]));
   const autoCaptureRef = useRef({ lastColors: '', count: 0, faceIndex: 0 });
   const currentFace = FACES[currentFaceIndex];
+
+  // Helper for haptics
+  const vibrate = (pattern: number | number[]) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try { navigator.vibrate(pattern); } catch (e) {}
+    }
+  };
 
   // Audio for capture
   const playCaptureSound = () => {
     try {
+      vibrate(50);
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) return;
       const ctx = new AudioContextClass();
@@ -139,19 +154,15 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
 
         let mediaStream: MediaStream;
         try {
-          // Attempt to get the rear/environment camera first
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'environment', width: { ideal: 720 }, height: { ideal: 720 } }
           });
         } catch (err: any) {
           if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.message?.includes('Permission denied')) {
-            throw err; // Do not fallback if it's explicitly a permission error
+            throw err;
           }
           console.warn("Could not get environment camera, falling back to default.", err);
-          // Fallback to any available camera (often fixes issues on laptops/desktops without 'environment' cameras)
-          mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: true
-          });
+          mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
         }
         
         setStream(mediaStream);
@@ -161,10 +172,8 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
       } catch (err: any) {
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.message?.includes('Permission denied')) {
           setError('Permission Denied: Your browser blocked access to the camera.');
-          console.warn('Camera permission denied by user or browser.');
         } else {
           setError(`Camera access error: ${err.message || 'Denied or unavailable'}.`);
-          console.error('Camera initialization error:', err);
         }
       }
     }
@@ -173,13 +182,18 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
     
     return () => {
       setStream(prevStream => {
-        if (prevStream) {
-          prevStream.getTracks().forEach(track => track.stop());
-        }
+        if (prevStream) prevStream.getTracks().forEach(track => track.stop());
         return null;
       });
     };
   }, []);
+
+  // Helper to find the most frequent item in an array
+  const mode = (arr: string[]) => {
+    return arr.sort((a,b) =>
+      arr.filter(v => v===a).length - arr.filter(v => v===b).length
+    ).pop();
+  };
 
   // Set up the sampling loop
   useEffect(() => {
@@ -188,49 +202,40 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
 
     const sampleColors = (timestamp: number) => {
       if (scanPhase === 'review') {
-        // Just loop and wait, don't overwrite user's manual edits
         animationFrameId = requestAnimationFrame(sampleColors);
         return;
       }
 
-      if (timestamp - lastSampleTime > 150) { // Sample every 150ms
+      if (timestamp - lastSampleTime > 100) { // Sample every 100ms
         if (videoRef.current && canvasRef.current && stream && !error) {
           const video = videoRef.current;
           const canvas = canvasRef.current;
           const ctx = canvas.getContext('2d', { willReadFrequently: true });
           
           if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
-            // Match canvas size to video size
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            
-            // Draw current frame
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             
-            // Calculate grid bounds (assume a square grid in the center of the video)
             const minDim = Math.min(canvas.width, canvas.height);
-            const gridWidth = minDim * 0.85; // Grid takes up 85% of the smallest dimension
+            const gridWidth = minDim * 0.85;
             const startX = (canvas.width - gridWidth) / 2;
             const startY = (canvas.height - gridWidth) / 2;
             const cellSize = gridWidth / 3;
             
-            const newColors = [];
+            const rawColors = [];
             
             for (let i = 0; i < 9; i++) {
               if (i === 4) {
-                // Center is always fixed for standard cubes based on face
-                newColors.push(currentFace);
+                rawColors.push(currentFace);
                 continue;
               }
               
               const row = Math.floor(i / 3);
               const col = i % 3;
-              
-              // Sample from the center of each cell
               const sampleX = startX + (col * cellSize) + (cellSize / 2);
               const sampleY = startY + (row * cellSize) + (cellSize / 2);
               
-              // Average a small 10x10 area to reduce noise
               const areaSize = 10;
               let rTotal = 0, gTotal = 0, bTotal = 0;
               const imgData = ctx.getImageData(sampleX - areaSize/2, sampleY - areaSize/2, areaSize, areaSize).data;
@@ -246,27 +251,46 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
               const g = Math.round(gTotal / pixelCount);
               const b = Math.round(bTotal / pixelCount);
               
-              newColors.push(classifyColor(r, g, b));
+              rawColors.push(classifyColor(r, g, b));
             }
             
-            setLiveColors(newColors);
+            // Smoothing Logic: Buffer the last 4 frames
+            const smoothedColors = [...rawColors];
+            const newStableTiles = Array(9).fill(false);
+            newStableTiles[4] = true; // Center is always stable
+
+            for (let i = 0; i < 9; i++) {
+              if (i === 4) continue;
+              const hist = colorHistoryRef.current[i];
+              hist.push(rawColors[i]);
+              if (hist.length > 5) hist.shift(); // Keep last 5 samples
+              
+              if (hist.length >= 3) {
+                 const bestColor = mode(hist);
+                 if (bestColor) smoothedColors[i] = bestColor;
+              }
+
+              // Check if the tile is stable (all recent history values match)
+              if (hist.length >= 4 && hist.every(val => val === hist[hist.length - 1] && val !== 'empty')) {
+                newStableTiles[i] = true;
+              }
+            }
+
+            setStableTiles(newStableTiles);
+            setLiveColors(smoothedColors);
             
             // Auto Capture logic
             if (isAutoCapture) {
-              const colorsString = newColors.join(',');
-              if (!newColors.includes('empty')) {
-                // Same colors, same face
+              const colorsString = smoothedColors.join(',');
+              if (!smoothedColors.includes('empty')) {
                 if (colorsString === autoCaptureRef.current.lastColors && autoCaptureRef.current.faceIndex === currentFaceIndex) {
                   autoCaptureRef.current.count += 1;
-                  // Update progress smoothly (target is 10 frames = ~1.5s)
                   setStableProgress(Math.min(100, (autoCaptureRef.current.count / 8) * 100));
                   
                   if (autoCaptureRef.current.count >= 8) {
-                    // Capture triggered!
                     playCaptureSound();
                     autoCaptureRef.current.count = 0;
                     setStableProgress(0);
-                    
                     if (videoRef.current) videoRef.current.pause();
                     setScanPhase('review');
                   }
@@ -294,9 +318,7 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
 
     animationFrameId = requestAnimationFrame(sampleColors);
     
-    return () => {
-      cancelAnimationFrame(animationFrameId);
-    };
+    return () => cancelAnimationFrame(animationFrameId);
   }, [stream, error, currentFace, scanPhase, isAutoCapture]);
 
   const handleCapture = () => {
@@ -306,18 +328,20 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
   };
 
   const handleRetake = () => {
+    vibrate(40);
     if (videoRef.current) videoRef.current.play();
     setScanPhase('scanning');
-    setLiveColors(Array(9).fill('empty')); // Clear it out so it re-reads
+    setLiveColors(Array(9).fill('empty'));
+    colorHistoryRef.current = Array(9).fill([]); // Reset history
     autoCaptureRef.current.count = 0;
     setStableProgress(0);
   };
 
   const handleConfirm = () => {
+    vibrate([30, 50, 30]);
     const newState = [...scannedState];
     const startIndex = currentFaceIndex * 9;
     
-    // Apply live colors (even if manually tweaked) to the scanned state
     for (let i = 0; i < 9; i++) {
       newState[startIndex + i] = liveColors[i];
     }
@@ -332,20 +356,19 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
       if (videoRef.current) videoRef.current.play();
       setScanPhase('scanning');
       setLiveColors(Array(9).fill('empty'));
+      colorHistoryRef.current = Array(9).fill([]); // Reset history
       autoCaptureRef.current.count = 0;
       setStableProgress(0);
     } else {
-      // Done scanning all 6 faces
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
+      if (stream) stream.getTracks().forEach(track => track.stop());
       onScanComplete(newState);
     }
   };
 
   const handleManualColorCycle = (index: number) => {
-    if (index === 4) return; // Center is fixed
-    if (scanPhase !== 'review') return; // Only allow editing during the review pause
+    if (index === 4) return;
+    if (scanPhase !== 'review') return;
+    vibrate(20);
     
     setLiveColors(prev => {
       const current = prev[index];
@@ -358,9 +381,9 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-end overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center overflow-hidden">
       {/* Header */}
-      <div className="w-full p-6 pb-20 flex justify-between items-start text-white bg-gradient-to-b from-black via-black/60 to-transparent absolute top-0 z-20">
+      <div className="w-full p-6 pt-[env(safe-area-inset-top,24px)] flex justify-between items-start text-white bg-gradient-to-b from-black via-black/80 to-transparent z-20 shrink-0">
         <div>
           <h2 className="text-xl font-black tracking-tight mb-0.5">Scan Face {currentFaceIndex + 1}</h2>
           <p className="text-blue-400 font-bold text-sm tracking-wide uppercase">{FACE_NAMES[currentFace]}</p>
@@ -377,7 +400,7 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
       </div>
 
       {/* Main Camera Area */}
-      <div className="relative w-full flex flex-col items-center px-4 mb-2">
+      <div className="relative w-full flex-1 flex flex-col justify-center items-center px-4 overflow-hidden z-10">
         {error ? (
           <div className="p-6 bg-red-900/40 text-red-100 border border-red-500/30 rounded-2xl max-w-md text-center m-4 backdrop-blur-xl">
             <AlertCircle className="w-12 h-12 mx-auto mb-4 text-red-400" />
@@ -406,21 +429,44 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
 
             {/* Grid Overlay */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none p-6">
-              <div className="w-full aspect-square grid grid-cols-3 grid-rows-3 gap-1 rounded-2xl bg-black/20 backdrop-blur-[1px] border border-white/10 overflow-hidden">
+              <div className="relative w-full aspect-square grid grid-cols-3 grid-rows-3 gap-1 rounded-[2rem] bg-black/10 backdrop-blur-[2px] border border-white/20 overflow-hidden shadow-2xl">
+                
+                {/* AR Frame Corner Brackets */}
+                <div className="absolute top-0 left-0 w-12 h-12 border-t-4 border-l-4 border-blue-400 rounded-tl-xl m-2 opacity-80" />
+                <div className="absolute top-0 right-0 w-12 h-12 border-t-4 border-r-4 border-blue-400 rounded-tr-xl m-2 opacity-80" />
+                <div className="absolute bottom-0 left-0 w-12 h-12 border-b-4 border-l-4 border-blue-400 rounded-bl-xl m-2 opacity-80" />
+                <div className="absolute bottom-0 right-0 w-12 h-12 border-b-4 border-r-4 border-blue-400 rounded-br-xl m-2 opacity-80" />
+
+                {/* Laser Scanning Line */}
+                {scanPhase === 'scanning' && (
+                  <div className="absolute left-0 top-0 w-full h-1 bg-blue-400 shadow-[0_0_15px_#60a5fa] opacity-70 animate-[scan_2s_ease-in-out_infinite]" />
+                )}
+
                 {liveColors.map((color, i) => (
                   <div 
                     key={i} 
                     className={clsx(
-                      "w-full h-full border-white/10 pointer-events-auto transition-all duration-300",
-                      i === 4 ? "border-2 z-10" : "border-[0.5px] cursor-pointer hover:bg-white/5",
+                      "w-full h-full pointer-events-auto transition-all duration-300 relative overflow-hidden",
                       COLOR_BG[color],
-                      scanPhase === 'scanning' ? "opacity-40" : "opacity-90"
+                      scanPhase === 'scanning' ? "opacity-30 mix-blend-plus-lighter" : "opacity-90 shadow-inner",
+                      i === 4 ? "z-10 bg-white/20" : "cursor-pointer hover:bg-white/20",
+                      stableTiles[i] && scanPhase === 'scanning' && "border-2 border-white/50 shadow-[0_0_15px_rgba(255,255,255,0.4)] z-20"
                     )}
                     onClick={() => handleManualColorCycle(i)}
                   >
+                      {/* Sub-grid borders to make it look more technical */}
+                      <div className="absolute inset-0 border-[0.5px] border-white/20 mix-blend-overlay pointer-events-none" />
+
+                      {/* Stability Reticle */}
+                      {scanPhase === 'scanning' && stableTiles[i] && i !== 4 && (
+                        <div className="absolute inset-0 m-auto w-1/2 h-1/2 border-[1.5px] border-green-400/80 rounded-md scale-100 transition-transform animate-pulse pointer-events-none" />
+                      )}
+
                       {i === 4 && (
-                        <div className="w-full h-full flex items-center justify-center opacity-100 mix-blend-difference text-white">
-                          <Check className="w-5 h-5 stroke-[3]" />
+                        <div className="w-full h-full flex items-center justify-center backdrop-blur-sm pointer-events-none">
+                           <div className="w-1/2 h-1/2 border-2 border-white/50 rounded-full flex items-center justify-center bg-black/20">
+                              <Check className="w-4 h-4 text-white opacity-80" />
+                           </div>
                         </div>
                       )}
                   </div>
@@ -432,7 +478,7 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
       </div>
 
       {/* Footer Controls */}
-      <div className="w-full p-6 pb-[env(safe-area-inset-bottom,24px)] flex flex-col items-center gap-6 bg-gradient-to-t from-black via-black/90 to-black/90">
+      <div className="w-full p-4 sm:p-6 pb-[env(safe-area-inset-bottom,24px)] flex flex-col items-center gap-4 sm:gap-6 bg-gradient-to-t from-black via-black/95 to-transparent z-20 shrink-0">
         <div className="text-center w-full max-w-[320px]">
           <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-4 mb-2 shadow-xl">
              {currentFaceIndex === 0 && <p className="text-blue-400 font-black text-sm uppercase tracking-wider mb-1">Face: WHITE CENTER</p>}

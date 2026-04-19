@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Cube from 'cubejs';
 import confetti from 'canvas-confetti';
-import { RotateCcw, Play, Pause, ChevronRight, ChevronLeft, CheckCircle2, AlertCircle, Loader2, Camera, Dices, Music, Volume2 } from 'lucide-react';
+import { RotateCcw, Play, Pause, ChevronRight, ChevronLeft, CheckCircle2, AlertCircle, Loader2, Camera, Dices, Music, Volume2, Compass } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'motion/react';
 import SolverWorker from './solver.worker?worker';
@@ -376,26 +376,6 @@ export default function App() {
 
         <div className="flex flex-col md:flex-row flex-1 relative">
           
-          <AnimatePresence>
-            {isScanning && (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="absolute inset-0 z-50 bg-black/90 backdrop-blur-md rounded-b-3xl overflow-hidden"
-              >
-                <CameraScanner 
-                  initialState={cubeState}
-                  onCancel={() => setIsScanning(false)}
-                  onScanComplete={(newState) => {
-                    setCubeState(newState);
-                    setIsScanning(false);
-                  }}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           {/* Left Panel: Cube Input */}
           {!solution && (
             <div className="flex-1 p-4 sm:p-6 md:p-8 border-b md:border-b-0 md:border-r border-white/10 bg-transparent transition-colors duration-500">
@@ -461,25 +441,55 @@ export default function App() {
           )}
 
           {/* Right Panel: Solution Guide */}
-          <div className={clsx("p-4 sm:p-6 md:p-8 flex flex-col transition-colors duration-500", (solution) ? "flex-1 items-center bg-transparent" : "w-full md:w-96 bg-transparent")}>
+          <div className={clsx("p-4 sm:p-6 md:p-8 flex flex-col transition-colors duration-500", (solution) ? "flex-1 items-center bg-transparent" : "w-full md:w-[450px] lg:w-[500px] bg-transparent")}>
             {!solution ? (
-              <>
-                <h2 className="text-xl font-bold text-slate-100 mb-2 drop-shadow-sm">Solution Guide</h2>
-                <p className="text-sm text-slate-300 mb-6 drop-shadow-sm">
-                  Note: This uses the advanced Kociemba algorithm to solve the cube in 20 moves or less.
-                  Make sure the <strong className="text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]">White</strong> center is facing UP and the <strong className="text-green-300 drop-shadow-[0_0_5px_rgba(34,197,94,0.5)]">Green</strong> center is facing FRONT before you start.
-                </p>
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-center">
-                  <div className="w-24 h-24 mb-4 opacity-20">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-                      <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-                      <line x1="12" y1="22.08" x2="12" y2="12"></line>
-                    </svg>
-                  </div>
-                  <p>Fill in your cube colors and click Solve to get step-by-step instructions.</p>
+              <div className="flex-1 flex flex-col justify-center max-w-md mx-auto w-full">
+                
+                <div className="bg-slate-900/60 border border-slate-700/50 rounded-3xl p-6 mb-6 backdrop-blur-md shadow-2xl relative overflow-hidden">
+                  {/* Decorative background flare */}
+                  <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 bg-blue-500/20 rounded-full blur-3xl pointer-events-none" />
+                  
+                  <h3 className="text-xl font-black text-white mb-4 flex items-center gap-2 drop-shadow-md">
+                    <Compass className="w-6 h-6 text-blue-400" />
+                    How to hold your cube
+                  </h3>
+                  
+                  <p className="text-sm text-slate-300 mb-6 font-medium leading-relaxed">
+                    To solve your cube successfully, you <strong className="text-white bg-white/10 px-1 py-0.5 rounded">MUST</strong> keep it facing the exact same way while painting colors and following the moves:
+                  </p>
+                  
+                  <ul className="space-y-3">
+                    <li className="flex items-center gap-4 bg-black/40 p-3.5 rounded-2xl border border-white/5 shadow-inner">
+                      <div className="w-8 h-8 rounded-full bg-white shadow-[0_0_15px_rgba(255,255,255,0.6)] shrink-0 border border-slate-200" />
+                      <div>
+                        <span className="block text-sm font-black text-white tracking-wide uppercase">Top Face</span>
+                        <span className="block text-xs text-slate-400 font-medium">White center points to the Ceiling</span>
+                      </div>
+                    </li>
+                    
+                    <li className="flex items-center gap-4 bg-black/40 p-3.5 rounded-2xl border border-white/5 shadow-inner">
+                      <div className="w-8 h-8 rounded-full bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.6)] shrink-0 border border-green-400" />
+                      <div>
+                        <span className="block text-sm font-black text-green-400 tracking-wide uppercase">Front Face</span>
+                        <span className="block text-xs text-slate-400 font-medium">Green center points directly at You</span>
+                      </div>
+                    </li>
+                    
+                    <li className="flex items-center gap-4 bg-black/40 p-3.5 rounded-2xl border border-white/5 shadow-inner">
+                      <div className="w-8 h-8 rounded-full bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.6)] shrink-0 border border-red-400" />
+                      <div>
+                        <span className="block text-sm font-black text-red-400 tracking-wide uppercase">Right Face</span>
+                        <span className="block text-xs text-slate-400 font-medium">Red center points to your Right hand</span>
+                      </div>
+                    </li>
+                  </ul>
                 </div>
-              </>
+
+                <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-center bg-white/5 rounded-3xl border border-white/10 p-6 border-dashed backdrop-blur-sm">
+                  <Dices className="w-10 h-10 mb-3 opacity-30" />
+                  <p className="text-sm font-medium px-4">Input your cube colors manually or use the <strong className="text-white">Scan Cube</strong> camera up top to begin.</p>
+                </div>
+              </div>
             ) : solution.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-green-400 text-center drop-shadow-sm">
                 <CheckCircle2 className="w-16 h-16 mb-4" />
@@ -563,6 +573,27 @@ export default function App() {
         </div>
       </div>
     </div>
+    
+    <AnimatePresence>
+      {isScanning && (
+        <motion.div 
+          initial={{ opacity: 0, y: '100%' }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: '100%' }}
+          transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+          className="fixed inset-0 z-[9999] bg-black overflow-hidden"
+        >
+          <CameraScanner 
+            initialState={cubeState}
+            onCancel={() => setIsScanning(false)}
+            onScanComplete={(newState) => {
+              setCubeState(newState);
+              setIsScanning(false);
+            }}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
     </>
   );
 }
