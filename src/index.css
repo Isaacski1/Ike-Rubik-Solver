@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@keyframes shoot {
+  0% {
+    transform: translateX(0) translateY(0) rotate(-45deg);
+    opacity: 1;
+  }
+  15%, 100% {
+    transform: translateX(-2000px) translateY(2000px) rotate(-45deg);
+    opacity: 0;
+  }
+}
+
+.shooting-star {
+  animation: shoot 5s linear infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+
+.star-twinkle {
+  animation: twinkle linear infinite;
+  will-change: opacity;
+}
