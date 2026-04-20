@@ -154,11 +154,21 @@ export default function App() {
   const handleSongEnd = () => {
     if (bgMusicRef.current) {
       const currentSrc = bgMusicRef.current.src;
-      // Get a random song that is not the current one
-      let nextSongs = AUDIO_TRACKS.filter(s => !currentSrc.includes(s.split('?')[0]));
-      if (nextSongs.length === 0) nextSongs = AUDIO_TRACKS;
-      bgMusicRef.current.src = nextSongs[Math.floor(Math.random() * nextSongs.length)];
-      bgMusicRef.current.play().catch(console.error);
+      const currentIndex = AUDIO_TRACKS.findIndex(s => currentSrc.includes(s));
+      const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % AUDIO_TRACKS.length : 0;
+      
+      bgMusicRef.current.src = AUDIO_TRACKS[nextIndex];
+      bgMusicRef.current.load(); // Ensure the new source is loaded
+      
+      if (isMusicPlaying) {
+        const playPromise = bgMusicRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            console.error("Auto-play prevented on new song:", error);
+            setIsMusicPlaying(false);
+          });
+        }
+      }
     }
   };
 
@@ -167,7 +177,10 @@ export default function App() {
       if (isMusicPlaying) {
         bgMusicRef.current.pause();
       } else {
-        bgMusicRef.current.play().catch(console.error);
+        const playPromise = bgMusicRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(console.error);
+        }
       }
       setIsMusicPlaying(!isMusicPlaying);
     }
@@ -324,7 +337,14 @@ export default function App() {
         <GalaxyBackground />
 
       {/* Hidden audio element for background music */}
-      <audio ref={bgMusicRef} onEnded={handleSongEnd} className="hidden" preload="auto" />
+      <audio 
+        ref={bgMusicRef} 
+        onEnded={handleSongEnd}
+        onPlay={() => setIsMusicPlaying(true)}
+        onPause={() => setIsMusicPlaying(false)}
+        className="hidden" 
+        preload="auto" 
+      />
       
       <div className="max-w-5xl w-full bg-transparent rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col border border-white/10 transition-colors duration-500">
         
