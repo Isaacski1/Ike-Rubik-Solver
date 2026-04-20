@@ -1,5 +1,5 @@
 {
-  "name": "Ike Rubik Solver",
+  "name": "Isaacski Rubik Solver",
   "description": "A 3D Rubik's Cube solver with an interactive step-by-step visual guide, dark mode support, and camera scanning.",
   "requestFramePermissions": ["camera"]
 }

@@ -144,23 +144,23 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
     } catch(e) {}
   };
 
+  const [retryCount, setRetryCount] = useState(0);
+  
   // Initialize camera
   useEffect(() => {
     async function initCamera() {
+      setError(null);
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('Your browser does not support accessing the camera, or you are not in a secure context (HTTPS).');
+          throw new Error('Your browser does not support camera access in this view.');
         }
 
         let mediaStream: MediaStream;
         try {
           mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 720 }, height: { ideal: 720 } }
+            video: { facingMode: 'environment', width: { ideal: 1080 }, height: { ideal: 1080 } }
           });
         } catch (err: any) {
-          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.message?.includes('Permission denied')) {
-            throw err;
-          }
           console.warn("Could not get environment camera, falling back to default.", err);
           mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
         }
@@ -168,12 +168,16 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
         setStream(mediaStream);
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
+          videoRef.current.play().catch(e => console.error("Video play failed", e));
         }
       } catch (err: any) {
+        console.error("Camera Init Error:", err);
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.message?.includes('Permission denied')) {
-          setError('Permission Denied: Your browser blocked access to the camera.');
+          setError('Permission Denied: Please allow camera access in your browser settings to scan your cube.');
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          setError('No Camera Found: We couldn\'t detect a camera on your device.');
         } else {
-          setError(`Camera access error: ${err.message || 'Denied or unavailable'}.`);
+          setError(`Camera Error: ${err.message || 'Unable to connect to camera'}.`);
         }
       }
     }
@@ -186,7 +190,7 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
         return null;
       });
     };
-  }, []);
+  }, [retryCount]);
 
   // Helper to find the most frequent item in an array
   const mode = (arr: string[]) => {
@@ -402,18 +406,29 @@ export default function CameraScanner({ onScanComplete, onCancel, initialState }
       {/* Main Camera Area */}
       <div className="relative w-full flex-1 flex flex-col justify-center items-center px-4 overflow-hidden z-10">
         {error ? (
-          <div className="p-6 bg-red-900/40 text-red-100 border border-red-500/30 rounded-2xl max-w-md text-center m-4 backdrop-blur-xl">
-            <AlertCircle className="w-12 h-12 mx-auto mb-4 text-red-400" />
-            <h3 className="text-xl font-bold text-white mb-2 font-mono uppercase tracking-tighter">Connection Lost</h3>
-            <p className="font-medium text-sm mb-4 opacity-80">{error}</p>
-            <div className="flex flex-col gap-3 mt-4">
+          <div className="p-6 bg-slate-900/40 text-slate-100 border border-white/10 rounded-[2.5rem] max-w-md text-center m-4 backdrop-blur-2xl shadow-2xl">
+            <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500/20">
+               <AlertCircle className="w-10 h-10 text-red-500" />
+            </div>
+            <h3 className="text-2xl font-black text-white mb-2 tracking-tight uppercase">Setup Required</h3>
+            <p className="font-medium text-sm mb-8 text-slate-400 leading-relaxed px-4">{error}</p>
+            <div className="flex flex-col gap-3">
+              <button 
+                onClick={() => setRetryCount(prev => prev + 1)}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] transition-all shadow-xl active:scale-95"
+              >
+                Try Again
+              </button>
               <button 
                 onClick={onCancel}
-                className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-bold text-xs uppercase tracking-widest transition-colors border border-white/10"
+                className="w-full py-4 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] transition-all border border-white/10"
               >
-                Go Back
+                Manual Input
               </button>
             </div>
+            <p className="mt-8 text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed">
+              Tip: If you're using a mobile device, make sure no other apps are using the camera.
+            </p>
           </div>
         ) : (
           <div className="relative w-full max-w-[400px] aspect-square bg-slate-900 mx-auto rounded-[2.5rem] overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] border-2 border-white/5 shrink-0">
